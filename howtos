@@ -1,0 +1,57 @@
+first we have to create custom network instead of the default:
+docker network create --driver bridge isolated_nw
+
+then create storage for persitence data:
+mkdir /Users/dewey/mysql_primary_data
+
+then we have to provisioning primary instance(s):
+docker run --network=isolated_nw -v /Users/dewey/mysql_primary_data:/var/lib/mysql -v /Users/dewey/primaryconf:/etc/dewey-server.conf.d/ -p 3308:3306 -p 33061:33060 --name dewey_primary -e MYSQL_ROOT_HOST='%' -e MYSQL_ROOT_PASSWORD=MysqlTestInstance -d dewey --default-authentication-plugin=mysql_native_password
+
+
+create user for replication process:
+mysql -h127.0.0.1 -uroot -p -P3308 -e "GRANT REPLICATION SLAVE ON *.* TO 'repl_user'@'%' IDENTIFIED BY 'replpass';"
+
+create docker volume for replication:
+docker volume create mysqlreplicavol
+
+test replication:
+docker run --network=isolated_nw -v mysqlreplicavol:/var/lib/mysql -v /Users/dewey/replicaconf:/etc/dewey-server.conf.d/ -p 3309:3306 -p 33062:33060 --name dewey_replica -e MYSQL_ROOT_HOST='%' -e MYSQL_ROOT_PASSWORD=MysqlTestInstance -d dewey --default-authentication-plugin=mysql_native_password
+
+change master:
+mysql -h127.0.0.1 -uroot -p -P3309 -e "CHANGE MASTER TO MASTER_HOST='dewey_primary',MASTER_USER='repl_user', MASTER_PASSWORD='replpass', MASTER_LOG_FILE='deb40d6941db-bin.000003', MASTER_LOG_POS=154;"
+
+mysql -h127.0.0.1 -uroot -p -P3309 -e "start slave";
+
+because these both work as master & slave then we don't have to worry about load balancing 
+in case the replication process takes a long time to finish, all we need to do is get the replication
+to default network with default port 3306.
+
+
+to move big mysql data
+on source server:
+
+1.Stop mysql server
+
+2.Copy contents of datadir to another location on disk as mysqlbackup
+
+3.Start mysql server again
+
+4.Compress the data (tar -czvf mysqlbackup.tar.gz mysqlbackup)
+
+5.Copy the compressed file to destination server
+
+On destination server:
+
+1.Install the exact same version of MySQL (don't start it yet)
+
+2.Unzip the compressed file (tar -xzvf mysqlbackup.tar.gz)
+
+3.Move contents of mysqlbackup to the datadir.
+
+4.Make sure that all permissions and ownerships are correct
+
+5.Make sure the innodb_log_file_size is the same on destination server, 
+or if it isn't, don't copy the old log files (MySQL then will generate these by itself)
+
+6.Start MySQL.
+
